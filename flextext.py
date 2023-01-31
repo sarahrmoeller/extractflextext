@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 # coding: utf-8
 
-# In[12]:
+# In[3]:
 
 
 import xml.etree.ElementTree as ET # parses XML files
@@ -11,9 +11,10 @@ import os
 
 # # Extract Data from flextext XML files
 
-# In[13]:
+# In[25]:
 
 
+#############################
 # placeholders/delimiters
 TEMP = '@@@'
 
@@ -51,7 +52,7 @@ CIRCUM_HOLE = '<>'
 CLITIC = '='
 
 
-# In[14]:
+# In[2]:
 
 
 def getTitleComment(xmlsection):
@@ -84,7 +85,7 @@ def getTitleComment(xmlsection):
     return title, comment
 
 
-# In[15]:
+# In[36]:
 
 
 # These cleaning functions handle pecularities or non-conventional annotation of IGT
@@ -98,6 +99,8 @@ def cleanWord(IGTstring):
     
     # TODO?: phrasal lexemes separated by double tilde
     #IGTstring = IGTstring.strip().replace(' ', '~~')
+    # remove Cyrillic quotation mark hyphen
+    IGTstring = IGTstring.strip('-')
     # use tilde for hyphenated words
     IGTstring = IGTstring.replace('-', '~')
     
@@ -158,7 +161,7 @@ def cleanPOS(IGTstring):
     
 
 
-# In[16]:
+# In[37]:
 
 
 def getInfixedStem(wordtxt, morphitem, infix):
@@ -197,7 +200,7 @@ def getInfixedStem(wordtxt, morphitem, infix):
     return pre_temp_morph, post_temp_morph
 
 
-# In[17]:
+# In[38]:
 
 
 def getMorpheme(morphitem, morphemetype):
@@ -210,7 +213,7 @@ def getMorpheme(morphitem, morphemetype):
         and does not mess up punctuation processing.'''
     
     # temporary array for morpheme information
-    morph_info = [TEMP, TEMP, TEMP, TEMP]
+    morph_info = [TEMP, TEMP, TEMP, TEMP, morphemetype]
     # indexes for types of information to be in morph_info
     MORPH_IDX = 0
     MORPHEME_IDX = 1
@@ -276,61 +279,59 @@ def getMorpheme(morphitem, morphemetype):
     return morph_info
 
 
-# In[18]:
+# ## Main Extraction Function
+
+# In[41]:
 
 
 def extract_flextext(flextext_filename):
-    '''Takes FLExText XML any number of texts. 
-    Extracts words. OUTPUT: 
-    [[text_title, 
-      text_comment, 
-      [*words*
-        [*word*
-        [line#, word, wPOS, morph, morpheme, gloss, mpos, morphemetype]*morpheme*
-        ]]]]'''
-    
-    #TODO: change output format to JSON/dictionary
-    
-    
+    '''Takes FLExText XML any number of texts. OUTPUT: 
+    [{"text_title":title, "text_comment":comment, "words":[
+        {"segnum":line#, "orig_word":word, "POS":postag, "morphemes": [
+                    [morph, morpheme, gloss, mpos, morphemetype]
+    ]}]}]'''
+
     root = ET.parse(flextext_filename).getroot()
     texts = []
     total_lexemes = 0 # NOTE: MWE is 1 lexeme
+    pos_tags_in_corpus = set()
     
     for text in root.iter('interlinear-text'):
         title,comment = getTitleComment(text)
-        temp_text = [title, comment]
-        temp_words = []
+        temp_text = {"text_title":title, "text_comment":comment}
         
         # ignoring paragraph breaks
-        for phrase in text.iter('phrase'):    
+        temp_words = []
+        for line_i,phrase in enumerate(text.iter('phrase')):
             # FLEx "segnum" is ID for phrase/line/sentence
             segnum = TEMP
             if phrase.find('item').get('type') == 'segnum':
                 segnum = phrase.find('item').text
             else:
-                segnum = 'NoLine#'
+                segnum = str(line_i)
 
-            # "words" or MWE as tokenized by FLEx user or whitespace
+            # "words" or MWE as tokenized by FLEx user
             for word in phrase.iter('word'):
                 wordtype = word.find('item').get('type')
                 wordstring = cleanWord(word.find('item').text)
-                
                 # ignore punctuation & digits
-                if (wordtype != PUNCT and not wordstring.isdigit()):
-                    temp_word = []
+                if wordtype != PUNCT and not wordstring.isdigit() and wordstring != '~' and wordstring != '':
                     affix_order = [] # to align infixes 
                     total_lexemes+=1
-        
+                    
                     # get word POS
                     temp_wpos = TEMP # word-level POS
                     for word_item in word.iter('item'):
                         if word_item.get('type') == WORD_POS:
                             temp_wpos = cleanPOS(word_item.text)
-
+                    pos_tags_in_corpus.add(temp_wpos)
+                    
                     # get interlinear for word segments, if any
-                    if word.find('morphemes') != None:
+                    temp_morphemes = []
+                    if word.find('morphemes') == None:  #TODO?: eliminate this line, use filter function
+                        temp_morphemes.append([TEMP, TEMP, TEMP, TEMP, TEMP])
+                    else:
                         for morph in word.iter('morph'):
-                            temp_segment = [segnum, wordstring, temp_wpos]
                             morphemetype = morph.get('type')
                             
                             # TODO: for non-neural models (need input/output alignment)
@@ -355,16 +356,11 @@ def extract_flextext(flextext_filename):
                                 if temp_morph[2] == TEMP: 
                                     temp_morph[2] = 'proper_name'
                             
-                            # add morpheme to list of word's segments
-                            temp_segment.extend(temp_morph)
-                            temp_segment.append(morphemetype)
-                            
-                            temp_word.append(temp_segment)
-                            
-                    else:
-                        temp_word = [[segnum, wordstring, temp_wpos, TEMP, TEMP, TEMP, TEMP, TEMP]]
-                        
-                    temp_words.append(temp_word)
+                            # add morpheme to dict of word's segments
+                            temp_morphemes.append(temp_morph)
+                    
+                    # create word dict
+                    temp_words.append({"line#":segnum,"orig_word":wordstring,"POS":temp_wpos,"morphemes":temp_morphemes})
             
             # TODO: get free translations
             # TODO: handle as many languages if needed
@@ -381,77 +377,120 @@ def extract_flextext(flextext_filename):
             #temp_line.append(en_translation)
             #temp_line.append(id_translation)
             
-        # add words to text
-        temp_text.append(temp_words)
+        
+        # add lines to text
+        temp_text["words"] = temp_words
         texts.append(temp_text)
     
     # corpus statistics
-    print("Total tokenized lexemes, ignoring punctuation and digits:", total_lexemes, end='\n\n')
-    # sanity check first 10 words
-    print(texts[0][2][:18], end='\n\n')
-    
+    print("Part of speech found:", pos_tags_in_corpus, end='\n\n')
+    print("Tokenized lexemes, ignoring punctuation and digits:", total_lexemes, end='\n\n')
+    # sanity check first line
+    print(texts[0]["words"][:10])
+    print()
+                                
     return texts
 
 
 # ### Filtering 
+# 
+# word_by_morpheme -> `texts[text_idx]["words"][word_idx]["morphemes"]`, i.e. [[morph, morpheme, gloss, mpos, morphemetype],...]
+# 
+# lexical_item -> `texts[text_idx][words][word_idx]["orig_word"]`, i.e. wordstring
+# 
+# #### Morpheme level Filters
 
-# In[19]:
+# In[45]:
 
 
-def glossed(wordlistofmorphemes):
-    '''checks for glosses, 
+def glossed(word_by_morphemes):
+    '''no words with missing glosses;
         assumes segmentation is complete'''
-    
     glossed = True
-    for segment in wordlistofmorphemes:
-        if segment[5] == TEMP:
+    for segment in word_by_morphemes:
+        # check gloss of morphemes
+        if segment[2] == TEMP:
             glossed = False
             break # this line saves time 
     return glossed
     
-    
-def annotated(wordlistofmorphemes):
-    '''skipping words that have not been annotated 
+def segmented(word_by_morphemes):
+    '''no words that have not been segmented 
     (i.e. no <morphemes> tag in XML)'''
-    
     annotated = True
-    if len(wordlistofmorphemes) == 1:
-        if wordlistofmorphemes[0][3] == TEMP:
+    if len(word_by_morphemes) == 1:
+        # check surface morpheme
+        if word_by_morphemes[0][0] == TEMP:
             annotated = False
+        #TODO: check canonical morpheme
     return annotated
 
 
-def multiword(wordlistofmorphemes):
-    
+# #### Word level filters
+
+# In[53]:
+
+
+def multiword(lexical_item):
+    '''no lexical items with spaces'''
     mwe = False
-    if ' ' in wordlistofmorphemes[0][1]:
+    # check original text of word
+    if ' ' in lexical_item or '~' in lexical_item or '-' in lexical_item:
         mwe = True
     return mwe
+
+def selected_pos(word_postag):
+    '''filter for a list of specified word level POS'''
+    undesired_pos = False
+    # check word level POS tag
+    if word_postag not in SELECT_POS_TAGS:
+            undesired_pos = True
+    return undesired_pos
+
+
+# #### COMBINE FILTER FUNCTIONS HERE 
+
+# In[54]:
 
 
 def quality_check(extractedtexts):
     '''Write custom filter functions above, add calls here
-        Un/comment lines with filter calls as needed'''
+        add/remove function calls as needed. 
+        Returns list of words as list of morphemes'''
     
     good = []
     bad = []
     good_cnt = 0
-    
     for text in extractedtexts:
-        for word in text[-1]:
-            if glossed(word) and annotated(word) and not multiword(word):
-                good.append(word)
-                good_cnt+=1
-            else:
-                bad.append(word)
-    
-    print("Total segmented and glossed lexemes:", good_cnt, end='\n\n')
+        for word in text["words"]:
+            # add word level function to line below to completely eliminate
+            if not multiword(word['orig_word']) and selected_pos(word['POS']):
+                # add morpheme level filtering functions on line below
+                # use line below if purpose == gls or seg_gls
+                #if glossed(word["morphemes"]) and annotated(word["morphemes"]):
+                # use line below if seg only (not gls)
+                if segmented(word["morphemes"]):
+                    good.append(word)
+                    good_cnt+=1
+                # add filtered out words to unlabeled dataset    
+                else:
+                    bad.append(word)
+
+    print("Total after filtering:", good_cnt, end='\n\n')
     return good,bad
 
 
 # # Write to files
+# 
+# Get this list of words: 
+# 
+# `[{"segnum":line#, "orig_word":word, "POS":postag, "morphemes": [
+#                             [morph, morpheme, gloss, mpos, morphemetype]
+#                          ]}]` 
+# 
+# to files with one word per line
 
-# In[20]:
+# In[48]:
 
 
 def check_alignment(a, b):
@@ -459,78 +498,48 @@ def check_alignment(a, b):
         raise ValueError("morph(emes) and gloss must be same amount in a word")
         
 
-def extract2file(extracted_data, purpose, outfilepath):
+def morpho_words(extracted_words, purpose, outfilepath):
     '''Writes two files: x and Y (data and annotations; input and output)
-    No text or line divisions, just list of tokens
-    Purpose variable determines what will be preserved in file,
-    possibilities match output types variables
-    gls = glossing only, seggls = segmentation+glossing, pos = (word) POS tagging'''
+    No text or line divisions.
+    Possible purposes: gls = glossing only, seg_gls = segmentation+glossing, pos = (word) POS tagging'''
     
     input_data = []
     output_data = []
     
-    for word in extracted_data: 
-        input_data.append(' '.join(word[0][1])) # text token with space delimiter
+    for word in extracted_words: 
+        # input string (x)
+        input_data.append(' '.join(word["orig_word"])) # space between letters
             
-        # output types
-        wPOS_tag = word[0][2]
+        # output types (Y)
+        wPOS_tag = word["POS"]
         canonical_morphemes = []
         surface_morphemes = []
         morpheme_glosses = []
-        for morpheme in word:
-            canonical_morphemes.append(morpheme[3])
-            surface_morphemes.append(morpheme[4])
-            morpheme_glosses.append(morpheme[5])
+        for morpheme in word["morphemes"]:
+            surface_morphemes.append(morpheme[0])
+            canonical_morphemes.append(morpheme[1])
+            morpheme_glosses.append(morpheme[2])
 
-        # final output data
-        if purpose == '_pos':
+        # determines what will be written to output file
+        if purpose == 'pos':
             output_data.append(wPOS_tag)
-        elif purpose == '_can_seg':
+        elif purpose == 'can_seg':
             output_data.append(' '.join(canonical_morphemes))
-        elif purpose == '_surf_seg':
+        elif purpose == 'surf_seg':
             output_data.append(' '.join(surface_morphemes))
-        #TODO: purpose == 'can_seg_gls' ...allow for null morphemes
-        elif purpose == '_surf_seg_gls':
+        elif purpose == 'surf_seg_gls':
             check_alignment(surface_morphemes, morpheme_glosses)
             combined_seg_gls = []
             for i, morpheme in enumerate(surface_morphemes):
                 combined_seg_gls.append(morpheme+'#'+morpheme_glosses[i])
             output_data.append(' '.join(combined_seg_gls))
+        #TODO: purpose == 'can_seg_gls' must handle null morphemes
+        else:
+            print("Output format not found.")
 
-    with open(outfilepath+purpose+'.input', 'w', encoding='utf8') as I, open(outfilepath+purpose+'.output', 'w', encoding='utf8') as O:
+    with open(outfilepath+"_"+purpose+'.input', 'w', encoding='utf8') as I, open(outfilepath+"_"+purpose+'.output', 'w', encoding='utf8') as O:
         I.write('\n'.join(input_data))
         O.write('\n'.join(output_data))
-
-
-# # Sample Run Code: Extract Surface Segmentation Data to Files
-
-# In[21]:
-
-
-datalocation = r"../../../OneDrive - University of Florida/AL/data/"
-flexdata = [r'./FLExtexts/lez-all_txts_2019.flextext', r'./FLExtexts/lez-all_txts_2022.flextext']
-
-for dbfile in flexdata:
-    name = os.path.basename(dbfile).split('.')[0]
-    print('\n', name)
-    master_data = extract_flextext(dbfile)
-
-    # filter for my training purposes, split data lacking necessary annotations
-    # returns list of words
-    trainable_words, unannotated_words = quality_check(master_data)
-    print(trainable_words[:18])
-
-    # write all extracted words to _M(aster) file 
-    # write unannotated data (for my purposes) to _U(nlabeled) file
-    # write annotated data to separate file
-
-    #extract2file(master_data, '_seg', datalocation+name+'_M')
-    extract2file(unannotated_words, '_surf_seg', datalocation+name+'_U')
-    extract2file(trainable_words, '_surf_seg', datalocation+name)
-
-
-# In[ ]:
-
 
 
 
