@@ -1,0 +1,11 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+title: "extractflextext"
+abstract: "Extracts morphological and POS tags from FLExText XML export to be easily converted to JSON."
+authors:
+  - family-names: "Moeller"
+    given-names: "Sarah"
+repository-code: "https://github.com/sarahrmoeller/extractflextext"
+url: "https://github.com/sarahrmoeller/extractflextext"
+license: "GPL-3.0"
+type: software
